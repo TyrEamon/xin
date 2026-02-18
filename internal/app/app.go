@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"pixiv-tg-gallery/internal/config"
@@ -20,6 +21,13 @@ type App struct {
 	DB    *database.Client
 	TG    *telegram.Client
 	Pixiv *pixiv.Client
+
+	groupMu         sync.Mutex
+	tgGroupSessions map[int64]tgGroupSession
+
+	discussionMu       sync.Mutex
+	pendingDiscussion  map[int]pendingDiscussionComment
+	observedDiscussion map[int]discussionRelay
 }
 
 const pixivBootstrapStateKey = "pixiv_bootstrap_done"
@@ -32,7 +40,15 @@ type TGIngestResult struct {
 }
 
 func New(cfg *config.Config, db *database.Client, tg *telegram.Client, pv *pixiv.Client) *App {
-	return &App{Cfg: cfg, DB: db, TG: tg, Pixiv: pv}
+	return &App{
+		Cfg:                cfg,
+		DB:                 db,
+		TG:                 tg,
+		Pixiv:              pv,
+		tgGroupSessions:    make(map[int64]tgGroupSession),
+		pendingDiscussion:  make(map[int]pendingDiscussionComment),
+		observedDiscussion: make(map[int]discussionRelay),
+	}
 }
 
 func (a *App) HandleUpload(ctx context.Context, data []byte) error {
@@ -53,8 +69,27 @@ func (a *App) HandleTGMessage(ctx context.Context, msg *models.Message) (*TGInge
 	if msg == nil {
 		return nil, nil
 	}
-	if msg.Chat.ID == a.Cfg.PublishChannelID || msg.Chat.ID == a.Cfg.StorageChannelID || msg.Chat.ID == a.Cfg.DiscussionGroupID {
+	if msg.Chat.ID == a.Cfg.DiscussionGroupID {
+		a.HandleDiscussionRelay(ctx, msg)
 		return nil, nil
+	}
+	if msg.Chat.ID == a.Cfg.PublishChannelID || msg.Chat.ID == a.Cfg.StorageChannelID {
+		return nil, nil
+	}
+
+	if payload, isStart := parseStartPayload(msg.Text); isStart {
+		result, handled, err := a.handleStartPayload(ctx, msg, payload)
+		if handled {
+			return result, err
+		}
+	}
+
+	if action, ok := parseSpoilerCommand(msg.Text); ok {
+		return a.handleSpoilerCommand(ctx, msg, action)
+	}
+
+	if cmd, ok := parseTGGroupCommand(msg.Text); ok {
+		return a.handleTGGroupCommand(ctx, msg, cmd)
 	}
 
 	title := strings.TrimSpace(msg.Caption)
@@ -65,24 +100,41 @@ func (a *App) HandleTGMessage(ctx context.Context, msg *models.Message) (*TGInge
 		title = "TG"
 	}
 
-	var fileID string
-	if msg.Document != nil {
-		fileID = msg.Document.FileID
-	} else if len(msg.Photo) > 0 {
-		fileID = msg.Photo[len(msg.Photo)-1].FileID
+	media, hasMedia := extractIncomingMedia(msg)
+	links := extractSupportedLinks(msg.Text, msg.Caption)
+	if !hasMedia && len(links) == 0 {
+		return nil, nil
 	}
 
-	if fileID == "" {
-		links := extractSupportedLinks(msg.Text, msg.Caption)
-		if len(links) == 0 {
-			return nil, nil
+	if !a.isTGIngestAuthorized(msg) {
+		return &TGIngestResult{Summary: "哼，这个功能只给主人和白名单用喵~"}, nil
+	}
+
+	if hasMedia {
+		if queued, count, err := a.appendTGGroupItem(msg, media, title); err != nil {
+			return &TGIngestResult{Summary: "排队失败了喵：" + err.Error()}, nil
+		} else if queued {
+			return &TGIngestResult{Summary: fmt.Sprintf("收到第 %d 个文件了喵~", count)}, nil
 		}
+	}
+
+	if !hasMedia {
 		return a.handleTGLinks(ctx, links)
 	}
 
-	data, _, err := a.TG.DownloadFile(ctx, fileID)
+	data, _, err := a.TG.DownloadFile(ctx, media.FileID)
 	if err != nil {
 		return nil, err
+	}
+
+	if !media.isImage() {
+		if err := a.publishIncomingMotion(ctx, data, media, title); err != nil {
+			return nil, err
+		}
+		return &TGIngestResult{
+			Title:   title,
+			Summary: fmt.Sprintf("\u54fc\uff0c\u5904\u7406\u597d\u4e86\u55b5~\n\u8fd9\u6b21\u662f%s\uff0c\u5df2\u53d1\u5e03\u5230\u9891\u9053\uff08\u4e0d\u5199\u5165\u56fe\u7ad9\uff09\u3002", media.displayName()),
+		}, nil
 	}
 
 	imgID := fmt.Sprintf("tg_%d_%d", msg.Chat.ID, msg.ID)
@@ -103,15 +155,28 @@ func (a *App) HandleTGMessage(ctx context.Context, msg *models.Message) (*TGInge
 		ID:        img.ID,
 		Title:     img.Title,
 		SourceURL: img.SourceURL,
-		Summary:   fmt.Sprintf("Done meow~\nID: %s", img.ID),
+		Summary:   fmt.Sprintf("\u54fc\uff0c\u5904\u7406\u597d\u4e86\u55b5~\nID: %s", img.ID),
 	}, nil
+
 }
 
 func (a *App) CanHandleTGMessage(msg *models.Message) bool {
 	if msg == nil {
 		return false
 	}
-	if len(msg.Photo) > 0 || msg.Document != nil {
+	if msg.Chat.ID == a.Cfg.DiscussionGroupID && msg.IsAutomaticForward {
+		return true
+	}
+	if _, ok := parseStartPayload(msg.Text); ok {
+		return true
+	}
+	if _, ok := parseSpoilerCommand(msg.Text); ok {
+		return true
+	}
+	if _, ok := parseTGGroupCommand(msg.Text); ok {
+		return true
+	}
+	if len(msg.Photo) > 0 || msg.Document != nil || msg.Video != nil || msg.Animation != nil {
 		return true
 	}
 	return len(extractSupportedLinks(msg.Text, msg.Caption)) > 0

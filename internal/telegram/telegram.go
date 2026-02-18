@@ -11,6 +11,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -21,6 +23,7 @@ import (
 const (
 	maxPhotoSize    = 9 * 1024 * 1024
 	maxDimension    = 4950
+	maxMediaGroup   = 10
 	minJPEGQuality  = 50
 	getFileRetries  = 3
 	downloadRetries = 3
@@ -33,6 +36,9 @@ type Client struct {
 	PublishChannelID  int64
 	StorageChannelID  int64
 	DiscussionGroupID int64
+
+	previewMu         sync.RWMutex
+	previewHasSpoiler bool
 }
 
 type SendOptions struct {
@@ -50,6 +56,31 @@ type SendResult struct {
 	Height          int
 }
 
+type DiscussionLinkButton struct {
+	Text string
+	URL  string
+}
+
+type DiscussionButtons struct {
+	DetailsURL    string
+	OriginURL     string
+	OriginButtons []DiscussionLinkButton
+}
+
+type PreviewMedia struct {
+	Data     []byte
+	Filename string
+	Width    int
+	Height   int
+}
+
+type PreviewSendResult struct {
+	PreviewID    string
+	PublishMsgID int
+	Width        int
+	Height       int
+}
+
 func New(token string, publishChannelID, storageChannelID, discussionGroupID int64) (*Client, error) {
 	b, err := bot.New(token)
 	if err != nil {
@@ -62,6 +93,19 @@ func New(token string, publishChannelID, storageChannelID, discussionGroupID int
 		StorageChannelID:  storageChannelID,
 		DiscussionGroupID: discussionGroupID,
 	}, nil
+}
+
+func (c *Client) SetPreviewHasSpoiler(v bool) {
+	c.previewMu.Lock()
+	c.previewHasSpoiler = v
+	c.previewMu.Unlock()
+}
+
+func (c *Client) GetPreviewHasSpoiler() bool {
+	c.previewMu.RLock()
+	v := c.previewHasSpoiler
+	c.previewMu.RUnlock()
+	return v
 }
 
 func (c *Client) DownloadFile(ctx context.Context, fileID string) ([]byte, string, error) {
@@ -127,59 +171,246 @@ func (c *Client) DownloadFile(ctx context.Context, fileID string) ([]byte, strin
 }
 
 func (c *Client) SendArtwork(ctx context.Context, data []byte, opts SendOptions) (SendResult, error) {
-	res := SendResult{}
-	res.Width, res.Height, _ = getImageInfo(data)
-
-	previewData := data
-	if needsCompress(data, res.Width, res.Height) {
-		if compressed, err := compressImage(data, maxPhotoSize); err == nil {
-			previewData = compressed
-		}
-	}
-
-	publishMsg, err := c.Bot.SendPhoto(ctx, &bot.SendPhotoParams{
-		ChatID:    c.PublishChannelID,
-		Photo:     &models.InputFileUpload{Filename: "preview.jpg", Data: bytes.NewReader(previewData)},
-		Caption:   opts.PreviewCaption,
-		ParseMode: models.ParseModeHTML,
-	})
+	previewRes, err := c.SendPreviewPhoto(ctx, data, opts.PreviewCaption)
 	if err != nil {
 		return SendResult{}, err
-	}
-	res.PublishMsgID = publishMsg.ID
-	if len(publishMsg.Photo) > 0 {
-		res.PreviewID = publishMsg.Photo[len(publishMsg.Photo)-1].FileID
 	}
 
 	originCaption := opts.OriginCaption
 	if originCaption == "" {
 		originCaption = "Original"
 	}
-	_, format := detectImageFormat(data)
-	originName := "origin." + extFromFormat(format)
-	storageMsg, err := c.Bot.SendDocument(ctx, &bot.SendDocumentParams{
-		ChatID:   c.StorageChannelID,
-		Document: &models.InputFileUpload{Filename: originName, Data: bytes.NewReader(data)},
-		Caption:  originCaption,
-	})
+	originID, storageMsgID, err := c.SendOriginDocument(ctx, data, originCaption)
 	if err != nil {
 		return SendResult{}, err
 	}
-	res.StorageMsgID = storageMsg.ID
-	if storageMsg.Document != nil {
-		res.OriginID = storageMsg.Document.FileID
+
+	return SendResult{
+		PreviewID:    previewRes.PreviewID,
+		OriginID:     originID,
+		PublishMsgID: previewRes.PublishMsgID,
+		StorageMsgID: storageMsgID,
+		Width:        previewRes.Width,
+		Height:       previewRes.Height,
+	}, nil
+}
+
+func (c *Client) SendPreviewPhoto(ctx context.Context, data []byte, caption string) (PreviewSendResult, error) {
+	width, height, _ := getImageInfo(data)
+	previewData := data
+	if needsCompress(data, width, height) {
+		if compressed, err := compressImage(data, maxPhotoSize); err == nil {
+			previewData = compressed
+		}
 	}
 
+	publishMsg, err := c.Bot.SendPhoto(ctx, &bot.SendPhotoParams{
+		ChatID:     c.PublishChannelID,
+		Photo:      &models.InputFileUpload{Filename: "preview.jpg", Data: bytes.NewReader(previewData)},
+		Caption:    caption,
+		ParseMode:  models.ParseModeHTML,
+		HasSpoiler: c.GetPreviewHasSpoiler(),
+	})
+	if err != nil {
+		return PreviewSendResult{}, err
+	}
+
+	res := PreviewSendResult{
+		PublishMsgID: publishMsg.ID,
+		Width:        width,
+		Height:       height,
+	}
+	if len(publishMsg.Photo) > 0 {
+		res.PreviewID = publishMsg.Photo[len(publishMsg.Photo)-1].FileID
+	}
 	return res, nil
 }
 
-func (c *Client) SendDiscussionComment(ctx context.Context, publishMessageID int, text string) (int, error) {
+func (c *Client) SendPreviewMotion(ctx context.Context, data []byte, filename, caption string, asAnimation bool) (PreviewSendResult, error) {
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		filename = "preview.mp4"
+	}
+
+	res := PreviewSendResult{}
+	if asAnimation {
+		publishMsg, err := c.Bot.SendAnimation(ctx, &bot.SendAnimationParams{
+			ChatID:     c.PublishChannelID,
+			Animation:  &models.InputFileUpload{Filename: filename, Data: bytes.NewReader(data)},
+			Caption:    caption,
+			ParseMode:  models.ParseModeHTML,
+			HasSpoiler: c.GetPreviewHasSpoiler(),
+		})
+		if err != nil {
+			return PreviewSendResult{}, err
+		}
+		res.PublishMsgID = publishMsg.ID
+		if publishMsg.Animation != nil {
+			res.PreviewID = publishMsg.Animation.FileID
+			res.Width = publishMsg.Animation.Width
+			res.Height = publishMsg.Animation.Height
+		}
+		return res, nil
+	}
+
+	publishMsg, err := c.Bot.SendVideo(ctx, &bot.SendVideoParams{
+		ChatID:            c.PublishChannelID,
+		Video:             &models.InputFileUpload{Filename: filename, Data: bytes.NewReader(data)},
+		Caption:           caption,
+		ParseMode:         models.ParseModeHTML,
+		HasSpoiler:        c.GetPreviewHasSpoiler(),
+		SupportsStreaming: true,
+	})
+	if err != nil {
+		return PreviewSendResult{}, err
+	}
+	res.PublishMsgID = publishMsg.ID
+	if publishMsg.Video != nil {
+		res.PreviewID = publishMsg.Video.FileID
+		res.Width = publishMsg.Video.Width
+		res.Height = publishMsg.Video.Height
+	}
+	return res, nil
+}
+
+func (c *Client) SendOriginDocument(ctx context.Context, data []byte, caption string) (string, int, error) {
+	_, format := detectImageFormat(data)
+	originName := "origin." + extFromFormat(format)
+	return c.SendOriginDocumentWithFilename(ctx, data, originName, caption)
+}
+
+func (c *Client) SendOriginDocumentWithFilename(ctx context.Context, data []byte, filename, caption string) (string, int, error) {
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		filename = "origin.bin"
+	}
+	storageMsg, err := c.Bot.SendDocument(ctx, &bot.SendDocumentParams{
+		ChatID:   c.StorageChannelID,
+		Document: &models.InputFileUpload{Filename: filename, Data: bytes.NewReader(data)},
+		Caption:  caption,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if storageMsg.Document == nil {
+		return "", storageMsg.ID, nil
+	}
+	return storageMsg.Document.FileID, storageMsg.ID, nil
+}
+
+func (c *Client) SendPreviewMediaGroup(ctx context.Context, items []PreviewMedia, caption string) ([]PreviewSendResult, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("preview media group is empty")
+	}
+	if len(items) > maxMediaGroup {
+		return nil, fmt.Errorf("preview media group too large: %d", len(items))
+	}
+
+	media := make([]models.InputMedia, 0, len(items))
+	results := make([]PreviewSendResult, len(items))
+
+	for i, item := range items {
+		width := item.Width
+		height := item.Height
+		if width <= 0 || height <= 0 {
+			width, height, _ = getImageInfo(item.Data)
+		}
+
+		previewData := item.Data
+		if needsCompress(item.Data, width, height) {
+			if compressed, err := compressImage(item.Data, maxPhotoSize); err == nil {
+				previewData = compressed
+			}
+		}
+
+		filename := strings.TrimSpace(item.Filename)
+		if filename == "" {
+			filename = fmt.Sprintf("preview_%d.jpg", i)
+		}
+
+		input := &models.InputMediaPhoto{
+			Media:           "attach://" + filename,
+			MediaAttachment: bytes.NewReader(previewData),
+		}
+		if i == 0 && strings.TrimSpace(caption) != "" {
+			input.Caption = caption
+			input.ParseMode = models.ParseModeHTML
+		}
+		input.HasSpoiler = c.GetPreviewHasSpoiler()
+		media = append(media, input)
+
+		results[i].Width = width
+		results[i].Height = height
+	}
+
+	msgs, err := c.Bot.SendMediaGroup(ctx, &bot.SendMediaGroupParams{
+		ChatID: c.PublishChannelID,
+		Media:  media,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) != len(results) {
+		return nil, fmt.Errorf("send media group result mismatch: want=%d got=%d", len(results), len(msgs))
+	}
+
+	for i, msg := range msgs {
+		results[i].PublishMsgID = msg.ID
+		if len(msg.Photo) > 0 {
+			results[i].PreviewID = msg.Photo[len(msg.Photo)-1].FileID
+		}
+	}
+
+	return results, nil
+}
+
+func (c *Client) SendDocumentByFileID(ctx context.Context, chatID int64, fileID, caption string) (int, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return 0, fmt.Errorf("empty file id")
+	}
+
+	msg, err := c.Bot.SendDocument(ctx, &bot.SendDocumentParams{
+		ChatID:   chatID,
+		Document: &models.InputFileString{Data: fileID},
+		Caption:  strings.TrimSpace(caption),
+	})
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
+}
+
+func (c *Client) SendDiscussionReply(ctx context.Context, discussionMessageID int, text string, buttons DiscussionButtons) (int, error) {
 	disablePreview := true
+	replyMarkup := buildDiscussionReplyMarkup(buttons)
+
+	msg, err := c.Bot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      c.DiscussionGroupID,
+		Text:        text,
+		ReplyMarkup: replyMarkup,
+		ReplyParameters: &models.ReplyParameters{
+			MessageID: discussionMessageID,
+		},
+		LinkPreviewOptions: &models.LinkPreviewOptions{
+			IsDisabled: &disablePreview,
+		},
+	})
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
+}
+
+func (c *Client) SendDiscussionComment(ctx context.Context, publishMessageID int, text string, buttons DiscussionButtons) (int, error) {
+	disablePreview := true
+	replyMarkup := buildDiscussionReplyMarkup(buttons)
+
 	msg, err := c.Bot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:          c.DiscussionGroupID,
 		MessageThreadID: publishMessageID,
 		Text:            text,
-		ParseMode:       models.ParseModeHTML,
+		ReplyMarkup:     replyMarkup,
 		LinkPreviewOptions: &models.LinkPreviewOptions{
 			IsDisabled: &disablePreview,
 		},
@@ -189,9 +420,9 @@ func (c *Client) SendDiscussionComment(ctx context.Context, publishMessageID int
 	}
 
 	fallback, fallbackErr := c.Bot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    c.DiscussionGroupID,
-		Text:      text,
-		ParseMode: models.ParseModeHTML,
+		ChatID:      c.DiscussionGroupID,
+		Text:        text,
+		ReplyMarkup: replyMarkup,
 		LinkPreviewOptions: &models.LinkPreviewOptions{
 			IsDisabled: &disablePreview,
 		},
@@ -200,6 +431,57 @@ func (c *Client) SendDiscussionComment(ctx context.Context, publishMessageID int
 		return 0, err
 	}
 	return fallback.ID, err
+}
+
+func buildDiscussionReplyMarkup(buttons DiscussionButtons) *models.InlineKeyboardMarkup {
+	rows := make([][]models.InlineKeyboardButton, 0, 4)
+	header := make([]models.InlineKeyboardButton, 0, 2)
+
+	if strings.TrimSpace(buttons.DetailsURL) != "" {
+		header = append(header, models.InlineKeyboardButton{Text: "\u8be6\u60c5", URL: strings.TrimSpace(buttons.DetailsURL)})
+	}
+
+	origins := make([]DiscussionLinkButton, 0, 1+len(buttons.OriginButtons))
+	if strings.TrimSpace(buttons.OriginURL) != "" {
+		origins = append(origins, DiscussionLinkButton{Text: "\u539f\u56fe", URL: strings.TrimSpace(buttons.OriginURL)})
+	}
+	for _, btn := range buttons.OriginButtons {
+		url := strings.TrimSpace(btn.URL)
+		if url == "" {
+			continue
+		}
+		text := strings.TrimSpace(btn.Text)
+		if text == "" {
+			text = fmt.Sprintf("\u539f\u56fe%d", len(origins)+1)
+		}
+		origins = append(origins, DiscussionLinkButton{Text: text, URL: url})
+	}
+
+	if len(origins) > 0 && len(header) < 2 {
+		header = append(header, models.InlineKeyboardButton{Text: origins[0].Text, URL: origins[0].URL})
+		origins = origins[1:]
+	}
+	if len(header) > 0 {
+		rows = append(rows, header)
+	}
+
+	const originPerRow = 3
+	for i := 0; i < len(origins); i += originPerRow {
+		end := i + originPerRow
+		if end > len(origins) {
+			end = len(origins)
+		}
+		row := make([]models.InlineKeyboardButton, 0, end-i)
+		for _, btn := range origins[i:end] {
+			row = append(row, models.InlineKeyboardButton{Text: btn.Text, URL: btn.URL})
+		}
+		rows = append(rows, row)
+	}
+
+	if len(rows) == 0 {
+		return nil
+	}
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func detectImageFormat(data []byte) (image.Config, string) {
