@@ -37,8 +37,16 @@ func New(cfg *config.Config, db *database.Client, tg *telegram.Client, app *app.
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/gallery", s.handleGallery)
+	mux.HandleFunc("/gallery.html", s.handleGallery)
 	mux.HandleFunc("/favorites", s.handleFavorites)
+	mux.HandleFunc("/favorites.html", s.handleFavorites)
 	mux.HandleFunc("/gallery.js", s.handleGalleryJS)
+	mux.HandleFunc("/manifest.webmanifest", s.handleManifest)
+	mux.HandleFunc("/sw.js", s.handleServiceWorker)
+	mux.HandleFunc("/pwa-register.js", s.handlePWARegisterJS)
+	mux.HandleFunc("/logo.png", s.handleLogo)
+	mux.HandleFunc("/app-icon-192.png", s.handleAppIcon192)
+	mux.HandleFunc("/app-icon-512.png", s.handleAppIcon512)
 	mux.HandleFunc("/api/posts", s.handleApiPosts)
 	mux.HandleFunc("/api/favorites", s.handleApiFavorites)
 	mux.HandleFunc("/api/random", s.handleApiRandom)
@@ -76,6 +84,42 @@ func (s *Server) handleFavorites(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGalleryJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	s.serveFile(w, r, filepath.Join("web", "gallery.js"))
+}
+
+func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/manifest+json; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	s.serveFile(w, r, filepath.Join("web", "manifest.webmanifest"))
+}
+
+func (s *Server) handleServiceWorker(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	s.serveFile(w, r, filepath.Join("web", "sw.js"))
+}
+
+func (s *Server) handlePWARegisterJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	s.serveFile(w, r, filepath.Join("web", "pwa-register.js"))
+}
+
+func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=604800")
+	s.serveFile(w, r, filepath.Join("web", "logo.png"))
+}
+
+func (s *Server) handleAppIcon192(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=604800")
+	s.serveFile(w, r, filepath.Join("web", "app-icon-192.png"))
+}
+
+func (s *Server) handleAppIcon512(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=604800")
+	s.serveFile(w, r, filepath.Join("web", "app-icon-512.png"))
 }
 
 func (s *Server) handleAdminRoot(w http.ResponseWriter, r *http.Request) {
