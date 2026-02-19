@@ -12,6 +12,7 @@
     v: { offset: 0, loading: false, done: false }
   };
   const BATCH_SIZE = 20;
+  const LIGHTBOX_PRELOAD_THRESHOLD = 3;
   let activeType = "all";
 
   const segButtons = Array.prototype.slice.call(document.querySelectorAll('.seg-btn'));
@@ -336,7 +337,62 @@
     return wrapper;
   }
 
-  async function fetchBatch(type) {
+  function toFancyboxSlide(linkEl) {
+    if (!linkEl) return null;
+
+    const data = linkEl.dataset || {};
+    const thumbEl = linkEl.querySelector('img:not([aria-hidden])');
+    const src = data.src || linkEl.getAttribute('href') || linkEl.getAttribute('currentSrc') || linkEl.getAttribute('src') || '';
+    if (!src) return null;
+
+    const thumbSrc = data.thumb || data.thumbSrc ||
+      (thumbEl ? (thumbEl.getAttribute('currentSrc') || thumbEl.getAttribute('src') || thumbEl.dataset.src || '') : '');
+    const slide = {
+      src: src,
+      alt: data.alt || (thumbEl ? thumbEl.getAttribute('alt') : '') || undefined,
+      thumbSrc: thumbSrc || undefined,
+      thumbEl: thumbEl || undefined,
+      triggerEl: linkEl
+    };
+
+    Object.keys(data).forEach(function(key) {
+      const raw = String(data[key]);
+      slide[key] = raw === 'false' ? false : (raw === 'true' ? true : raw);
+    });
+
+    return slide;
+  }
+
+  function syncOpenLightbox(type, newItems) {
+    if (!window.Fancybox || typeof window.Fancybox.getInstance !== 'function') return;
+
+    const instance = window.Fancybox.getInstance();
+    if (!instance || typeof instance.getSlide !== 'function') return;
+
+    const currentSlide = instance.getSlide();
+    const triggerEl = currentSlide && currentSlide.triggerEl;
+    const group = triggerEl ? String(triggerEl.getAttribute('data-fancybox') || '') : '';
+    if (group !== ('group-' + type)) return;
+
+    const carousel = typeof instance.getCarousel === 'function' ? instance.getCarousel() : null;
+    if (!carousel || typeof carousel.add !== 'function') return;
+
+    const slides = newItems
+      .map(function(itemEl) { return itemEl.querySelector('.lightbox-link'); })
+      .map(toFancyboxSlide)
+      .filter(Boolean);
+
+    if (!slides.length) return;
+
+    try {
+      carousel.add(slides);
+    } catch (_) {
+      // no-op
+    }
+  }
+
+  async function fetchBatch(type, options) {
+    options = options || {};
     if (state[type].loading || state[type].done) return false;
     state[type].loading = true;
 
@@ -379,6 +435,10 @@
         masonryInstances[type].layout();
       }
 
+      if (options.syncLightbox) {
+        syncOpenLightbox(type, newItems);
+      }
+
       observer.observe();
       state[type].loading = false;
       return true;
@@ -392,6 +452,32 @@
     const nearBottom = (window.innerHeight + window.scrollY) >= (document.body.offsetHeight - 900);
     if (!nearBottom) return;
     fetchBatch(activeType);
+  }
+
+  function getLightboxType(fancybox) {
+    if (!fancybox || typeof fancybox.getSlide !== 'function') return '';
+    const slide = fancybox.getSlide();
+    const trigger = slide && slide.triggerEl;
+    const group = trigger ? String(trigger.getAttribute('data-fancybox') || '') : '';
+    if (!group.startsWith('group-')) return '';
+    return group.slice(6);
+  }
+
+  function maybeLoadMoreForLightbox(fancybox) {
+    const type = getLightboxType(fancybox);
+    if (!type || !state[type] || state[type].done || state[type].loading) return;
+
+    const carousel = fancybox && typeof fancybox.getCarousel === 'function' ? fancybox.getCarousel() : null;
+    const slides = carousel && typeof carousel.getSlides === 'function' ? carousel.getSlides() : null;
+    if (!Array.isArray(slides) || !slides.length) return;
+
+    const current = fancybox.getSlide ? fancybox.getSlide() : null;
+    const currentIndex = current && typeof current.index === 'number' ? current.index : 0;
+    const remaining = slides.length - currentIndex - 1;
+
+    if (remaining <= LIGHTBOX_PRELOAD_THRESHOLD) {
+      fetchBatch(type, { syncLightbox: true });
+    }
   }
 
   function filterGallery(type, trigger) {
@@ -428,6 +514,9 @@
     if (window.Fancybox) {
       const mobileViewer = window.matchMedia && window.matchMedia('(max-width: 860px)').matches;
       Fancybox.bind('[data-fancybox]', {
+        Carousel: {
+          infinite: false
+        },
         Thumbs: { autoStart: !mobileViewer },
         Toolbar: {
           display: mobileViewer ? {
@@ -438,6 +527,14 @@
             left: ['zoom', 'slideshow', 'fullscreen', 'thumbs', 'close'],
             middle: [],
             right: []
+          }
+        },
+        on: {
+          ready: function(fancybox) {
+            maybeLoadMoreForLightbox(fancybox);
+          },
+          'Carousel.change': function(fancybox) {
+            maybeLoadMoreForLightbox(fancybox);
           }
         }
       });
