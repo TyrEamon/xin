@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"path"
@@ -21,6 +23,11 @@ const (
 	maxTGLinksPerMessage    = 3
 	defaultTwitterAPIDomain = "fxtwitter.com"
 	maxPixivAlbumGroup      = 10
+	yandeAPITimeout         = 60 * time.Second
+	yandeDownloadTimeout    = 90 * time.Second
+	yandeAPIRetries         = 2
+	yandeDownloadRetries    = 2
+	yandeRetryBackoff       = 1500 * time.Millisecond
 )
 
 var (
@@ -350,21 +357,33 @@ func (a *App) ingestYandePosts(ctx context.Context, item supportedLink, posts []
 			continue
 		}
 
-		imgURL := post.bestImageURL()
-		if imgURL == "" {
+		imgURLs := post.imageURLCandidates()
+		if len(imgURLs) == 0 {
 			stats.Failed++
 			log.Printf("Yande image URL missing pid=%s", pid)
 			continue
 		}
 
-		data, err := downloadWithHeaders(ctx, imgURL, "https://yande.re/")
-		if err != nil {
+		var (
+			data      []byte
+			downloadE error
+			usedURL   string
+		)
+		for _, imgURL := range imgURLs {
+			data, downloadE = downloadWithHeadersRetry(ctx, imgURL, "https://yande.re/", yandeDownloadTimeout, yandeDownloadRetries, yandeRetryBackoff)
+			if downloadE == nil {
+				usedURL = imgURL
+				break
+			}
+			log.Printf("Yande download candidate failed pid=%s url=%s err=%v", pid, imgURL, downloadE)
+		}
+		if downloadE != nil {
 			stats.Failed++
-			log.Printf("Yande download failed pid=%s err=%v", pid, err)
+			log.Printf("Yande download failed pid=%s err=%v", pid, downloadE)
 			continue
 		}
 
-		originID, storageMsgID, err := a.TG.SendOriginDocumentWithFilename(ctx, data, buildYandeOriginFilename(post), "Original")
+		originID, storageMsgID, err := a.TG.SendOriginDocumentWithFilename(ctx, data, buildYandeOriginFilename(post, usedURL), "Original")
 		if err != nil {
 			stats.Failed++
 			log.Printf("Yande origin send failed pid=%s err=%v", pid, err)
@@ -529,9 +548,12 @@ func chunkYandePrepared(items []yandePreparedPost, size int) [][]yandePreparedPo
 	return out
 }
 
-func buildYandeOriginFilename(post yandePost) string {
+func buildYandeOriginFilename(post yandePost, rawURL string) string {
 	ext := ".jpg"
-	raw := strings.TrimSpace(post.bestImageURL())
+	raw := strings.TrimSpace(rawURL)
+	if raw == "" {
+		raw = strings.TrimSpace(post.bestImageURL())
+	}
 	if raw != "" {
 		if u, err := neturl.Parse(raw); err == nil {
 			candidate := strings.ToLower(path.Ext(u.Path))
@@ -1235,19 +1257,33 @@ type yandePost struct {
 	Tags        string `json:"tags"`
 }
 
-func (p yandePost) bestImageURL() string {
-	candidates := []string{p.FileURL, p.JPEGURL, p.PNGURL, p.SampleURL}
-	for _, u := range candidates {
-		u = strings.TrimSpace(u)
-		if u == "" {
+func (p yandePost) imageURLCandidates() []string {
+	rawCandidates := []string{p.FileURL, p.JPEGURL, p.PNGURL, p.SampleURL}
+	out := make([]string, 0, len(rawCandidates))
+	seen := make(map[string]struct{}, len(rawCandidates))
+	for _, raw := range rawCandidates {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
 			continue
 		}
-		if strings.HasPrefix(u, "//") {
-			return "https:" + u
+		if strings.HasPrefix(raw, "//") {
+			raw = "https:" + raw
 		}
-		return u
+		if _, ok := seen[raw]; ok {
+			continue
+		}
+		seen[raw] = struct{}{}
+		out = append(out, raw)
 	}
-	return ""
+	return out
+}
+
+func (p yandePost) bestImageURL() string {
+	candidates := p.imageURLCandidates()
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
 }
 
 type twitterStatusResp struct {
@@ -1576,25 +1612,13 @@ func fetchYandePosts(ctx context.Context, tags string) ([]yandePost, error) {
 	}
 
 	endpoint := fmt.Sprintf("https://yande.re/post.json?tags=%s", neturl.QueryEscape(tags))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	body, err := downloadWithHeadersRetry(ctx, endpoint, "https://yande.re/", yandeAPITimeout, yandeAPIRetries, yandeRetryBackoff)
 	if err != nil {
 		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	req.Header.Set("Referer", "https://yande.re/")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("yande status %d", resp.StatusCode)
 	}
 
 	var arr []yandePost
-	if err := json.NewDecoder(resp.Body).Decode(&arr); err != nil {
+	if err := json.Unmarshal(body, &arr); err != nil {
 		return nil, err
 	}
 	return arr, nil
@@ -1649,6 +1673,10 @@ func fetchYandeFamilyPosts(ctx context.Context, id string) ([]yandePost, error) 
 }
 
 func downloadWithHeaders(ctx context.Context, sourceURL, referer string) ([]byte, error) {
+	return downloadWithHeadersTimeout(ctx, sourceURL, referer, 45*time.Second)
+}
+
+func downloadWithHeadersTimeout(ctx context.Context, sourceURL, referer string, timeout time.Duration) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
 		return nil, err
@@ -1658,7 +1686,7 @@ func downloadWithHeaders(ctx context.Context, sourceURL, referer string) ([]byte
 		req.Header.Set("Referer", referer)
 	}
 
-	client := &http.Client{Timeout: 45 * time.Second}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -1668,4 +1696,78 @@ func downloadWithHeaders(ctx context.Context, sourceURL, referer string) ([]byte
 		return nil, fmt.Errorf("download status %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+func downloadWithHeadersRetry(ctx context.Context, sourceURL, referer string, timeout time.Duration, retries int, backoff time.Duration) ([]byte, error) {
+	if retries < 0 {
+		retries = 0
+	}
+	if timeout <= 0 {
+		timeout = 45 * time.Second
+	}
+	if backoff <= 0 {
+		backoff = time.Second
+	}
+
+	attempts := retries + 1
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		data, err := downloadWithHeadersTimeout(ctx, sourceURL, referer, timeout)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		if i >= retries || !isRetryableDownloadErr(err) {
+			break
+		}
+
+		wait := backoff * time.Duration(i+1)
+		if waitErr := sleepWithContext(ctx, wait); waitErr != nil {
+			break
+		}
+	}
+	return nil, lastErr
+}
+
+func isRetryableDownloadErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() || netErr.Temporary() {
+			return true
+		}
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(msg, "timeout") || strings.Contains(msg, "temporary") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "unexpected eof") {
+		return true
+	}
+	if strings.Contains(msg, "download status 429") || strings.Contains(msg, "download status 500") || strings.Contains(msg, "download status 502") || strings.Contains(msg, "download status 503") || strings.Contains(msg, "download status 504") {
+		return true
+	}
+
+	return false
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
