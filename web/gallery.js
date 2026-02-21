@@ -272,7 +272,7 @@
     let autoMode = false;
     let interactionPauseUntil = 0;
     const step = 1.15;
-    const interactionResumeDelayMs = 800;
+    const interactionResumeDelayMs = 1200;
     const actionButtons = [autoBtn, randomAllBtn, randomSmartBtn, topBtn];
     let layoutRafId = 0;
 
