@@ -153,7 +153,324 @@
     });
   }
 
+  function iconTools() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M12 5v14"/>' +
+      '<path d="M5 12h14"/>' +
+      '</svg>';
+  }
+
+  function iconPlay() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M9.85 7.45c-.96-.62-2.2.07-2.2 1.2v6.8c0 1.13 1.24 1.82 2.2 1.2l5-3.4a1.45 1.45 0 0 0 0-2.4z" fill="currentColor" stroke="none"/>' +
+      '</svg>';
+  }
+
+  function iconPause() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M10 8v8"/>' +
+      '<path d="M14 8v8"/>' +
+      '</svg>';
+  }
+
+  function iconUp() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M7 14l5-5 5 5"/>' +
+      '<path d="M7 19l5-5 5 5"/>' +
+      '</svg>';
+  }
+
+  function iconSpark() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M12 3.8l1.9 4.5 4.5 1.9-4.5 1.9-1.9 4.5-1.9-4.5-4.5-1.9 4.5-1.9z"/>' +
+      '<path d="M18.4 15.8l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/>' +
+      '</svg>';
+  }
+
+
+  function iconSmartRandom() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="3.5" y="7" width="7.2" height="11" rx="1.7"/>' +
+      '<rect x="12.3" y="5" width="8.2" height="14" rx="1.8"/>' +
+      '<path d="M7.1 4.4l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/>' +
+      '</svg>';
+  }
+
+  function injectFloatingToolsStyle() {
+    if (document.getElementById('floating-tools-style')) return;
+    const style = document.createElement('style');
+    style.id = 'floating-tools-style';
+    style.textContent =
+      '.floating-tools{position:fixed;right:max(24px,env(safe-area-inset-right));bottom:max(24px,env(safe-area-inset-bottom));z-index:30;width:220px;height:220px;pointer-events:none;}' +
+      '.floating-tools-menu{position:absolute;inset:0;pointer-events:none;}' +
+      '.floating-tools-action{--tx:0px;--ty:0px;position:absolute;right:6px;bottom:6px;width:44px;height:44px;border-radius:14px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;border:1px solid var(--glass-border);background:var(--card-bg);color:var(--text);box-shadow:0 10px 24px rgba(12,18,30,.18);backdrop-filter:blur(10px);opacity:0;pointer-events:none;transform:translate3d(0,0,0) scale(.36);transition:transform .34s cubic-bezier(.2,.85,.25,1.2),opacity .2s ease,color .2s ease,border-color .2s ease;}' +
+      '.floating-tools.open .floating-tools-action{opacity:1;pointer-events:auto;transform:translate3d(var(--tx),var(--ty),0) scale(1);}' +
+      '.floating-tools.open .action-auto{transition-delay:.02s;}' +
+      '.floating-tools.open .action-random-all{transition-delay:.06s;}' +
+      '.floating-tools.open .action-random-smart{transition-delay:.11s;}' +
+      '.floating-tools.open .action-top{transition-delay:.16s;}' +
+      '.floating-tools-action svg,.floating-tools-trigger svg{width:20px;height:20px;stroke:currentColor;}' +
+      '.floating-tools-action .icon-wrap,.floating-tools-trigger .icon-wrap{display:inline-flex;align-items:center;justify-content:center;line-height:0;}' +
+      '.floating-tools-action.action-auto svg{width:24px;height:24px;}' +
+      '.floating-tools.open .floating-tools-action:hover{transform:translate3d(var(--tx),var(--ty),0) scale(1.06);}' +
+      '.floating-tools-action.action-auto,.floating-tools-action.action-top{color:var(--accent);}' +
+      '.floating-tools-action.auto-active{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 32%,var(--glass-border));}' +
+      '.floating-tools-action.random-tool-btn{color:var(--accent);}' +
+      '[data-theme="dark"] .floating-tools-action.action-auto,[data-theme="dark"] .floating-tools-action.action-top,[data-theme="dark"] .floating-tools-action.random-tool-btn{color:#ffffff;border-color:rgba(255,255,255,.28);}' +
+      '[data-theme="dark"] .floating-tools-action.auto-active{color:#ffffff;border-color:rgba(255,255,255,.42);}' +
+      '.floating-tools-trigger{position:absolute;right:0;bottom:0;width:56px;height:56px;border-radius:18px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;border:1px solid color-mix(in srgb,var(--accent) 36%, transparent);background:linear-gradient(145deg,color-mix(in srgb,var(--card-bg) 88%, var(--accent) 12%),var(--card-bg));color:var(--accent);box-shadow:0 16px 30px color-mix(in srgb,var(--accent) 32%, transparent),0 8px 14px rgba(0,0,0,.16);backdrop-filter:blur(12px);pointer-events:auto;transition:transform .24s cubic-bezier(.2,.9,.2,1.2),box-shadow .2s ease;}' +
+      '.floating-tools-trigger::before{content:"";position:absolute;inset:-7px;border-radius:22px;border:1px solid color-mix(in srgb,var(--accent) 28%, transparent);opacity:0;transform:scale(.86);}' +
+      '.floating-tools.is-auto .floating-tools-trigger::before{opacity:.72;animation:floating-pulse 2.2s ease-out infinite;}' +
+      '.floating-tools.open .floating-tools-trigger{transform:rotate(45deg) scale(1.03);}' +
+      '.floating-tools.open .floating-tools-trigger::before{opacity:.9;transform:scale(1);}' +
+      '@keyframes floating-pulse{0%{opacity:.76;transform:scale(.82);}70%{opacity:.08;transform:scale(1.16);}100%{opacity:0;transform:scale(1.2);}}' +
+      '@media (hover:hover){' +
+      '  .floating-tools-action[data-tip]::after{content:attr(data-tip);position:absolute;right:calc(100% + 10px);top:50%;transform:translateY(-45%);white-space:nowrap;padding:6px 10px;border-radius:9px;background:var(--card-bg);border:1px solid var(--glass-border);box-shadow:0 8px 18px rgba(0,0,0,.16);font-size:12px;color:var(--text);opacity:0;pointer-events:none;transition:opacity .15s ease,transform .15s ease;}' +
+      '  .floating-tools.open .floating-tools-action:hover::after{opacity:1;transform:translateY(-50%);}' +
+      '}' +
+      '@media (max-width:560px){.floating-tools{right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));width:188px;height:188px;}.floating-tools-trigger{width:48px;height:48px;border-radius:15px;}.floating-tools-action{width:40px;height:40px;border-radius:12px;right:4px;bottom:4px;}}' +
+      '@media (prefers-reduced-motion:reduce){.floating-tools-action,.floating-tools-trigger{transition:none;}.floating-tools.is-auto .floating-tools-trigger::before{animation:none;}}';
+    document.head.appendChild(style);
+  }
+
+  function initFloatingTools() {
+    injectFloatingToolsStyle();
+
+    const host = document.createElement('div');
+    host.className = 'floating-tools';
+    host.innerHTML =
+      '<div class="floating-tools-menu">' +
+      '  <button class="floating-tools-action action-auto" id="floating-auto-scroll-btn" type="button" aria-label="Auto Scroll" title="Auto Scroll" data-tip="Auto Scroll">' +
+      '    <span class="icon-wrap">' + iconPlay() + '</span>' +
+      '  </button>' +
+      '  <button class="floating-tools-action random-tool-btn action-random-all" id="floating-random-all-btn" type="button" aria-label="Random Image" title="Random Image" data-tip="Random Image">' +
+      '    <span class="icon-wrap">' + iconSpark() + '</span>' +
+      '  </button>' +
+      '  <button class="floating-tools-action random-tool-btn action-random-smart" id="floating-random-smart-btn" type="button" aria-label="Smart Random" title="Smart Random" data-tip="Smart Random">' +
+      '    <span class="icon-wrap">' + iconSmartRandom() + '</span>' +
+      '  </button>' +
+      '  <button class="floating-tools-action action-top" id="floating-back-top-btn" type="button" aria-label="Back To Top" title="Back To Top" data-tip="Back To Top">' +
+      '    <span class="icon-wrap">' + iconUp() + '</span>' +
+      '  </button>' +
+      '</div>' +
+      '<button class="floating-tools-trigger" id="floating-tools-trigger" type="button" aria-expanded="false" aria-label="Quick Tools" title="Quick Tools">' +
+      '  <span class="icon-wrap">' + iconTools() + '</span>' +
+      '</button>';
+    document.body.appendChild(host);
+
+    const trigger = document.getElementById('floating-tools-trigger');
+    const autoBtn = document.getElementById('floating-auto-scroll-btn');
+    const randomAllBtn = document.getElementById('floating-random-all-btn');
+    const randomSmartBtn = document.getElementById('floating-random-smart-btn');
+    const topBtn = document.getElementById('floating-back-top-btn');
+    const autoIconWrap = autoBtn ? autoBtn.querySelector('.icon-wrap') : null;
+
+    if (!trigger || !autoBtn || !randomAllBtn || !randomSmartBtn || !topBtn || !autoIconWrap) return;
+
+    const randomBase = API_BASE || window.location.origin;
+    let rafId = 0;
+    let autoMode = false;
+    let interactionPauseUntil = 0;
+    const step = 1.15;
+    const interactionResumeDelayMs = 800;
+    const actionButtons = [autoBtn, randomAllBtn, randomSmartBtn, topBtn];
+    let layoutRafId = 0;
+
+    function applyRadialLayout() {
+      const count = actionButtons.length;
+      if (!count) return;
+
+      const isMobile = window.innerWidth <= 560;
+      const buttonSize = isMobile ? 40 : 44;
+
+      if (isMobile) {
+        const stackGap = 10;
+        const stepY = buttonSize + stackGap;
+        const zoneWidth = 92;
+        const zoneHeight = stepY * count + buttonSize + 24;
+
+        host.style.width = zoneWidth + 'px';
+        host.style.height = zoneHeight + 'px';
+
+        actionButtons.forEach(function(btn, index) {
+          btn.style.setProperty('--tx', '0px');
+          btn.style.setProperty('--ty', String(-Math.round(stepY * (index + 1))) + 'px');
+        });
+        return;
+      }
+
+      const gap = 8;
+      const startDeg = 174;
+      const endDeg = 282;
+      const stepDeg = count > 1 ? (endDeg - startDeg) / (count - 1) : 0;
+      const stepRad = stepDeg * Math.PI / 180;
+
+      let radius = 96;
+      if (count > 1 && stepRad > 0) {
+        const minRadius = (buttonSize + gap) / (2 * Math.sin(stepRad / 2));
+        if (Number.isFinite(minRadius)) {
+          radius = Math.max(radius, Math.ceil(minRadius));
+        }
+      }
+
+      const zoneSize = radius + 66;
+      host.style.width = zoneSize + 'px';
+      host.style.height = zoneSize + 'px';
+
+      actionButtons.forEach(function(btn, index) {
+        const angle = (startDeg + stepDeg * index) * Math.PI / 180;
+        const tx = Math.round(radius * Math.cos(angle));
+        const ty = Math.round(radius * Math.sin(angle));
+        btn.style.setProperty('--tx', tx + 'px');
+        btn.style.setProperty('--ty', ty + 'px');
+      });
+    }
+
+    function scheduleRadialLayout() {
+      if (layoutRafId) {
+        window.cancelAnimationFrame(layoutRafId);
+      }
+      layoutRafId = window.requestAnimationFrame(function() {
+        layoutRafId = 0;
+        applyRadialLayout();
+      });
+    }
+
+    function setPanelOpen(open) {
+      host.classList.toggle('open', open);
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function updateAutoUI() {
+      autoBtn.classList.toggle('auto-active', autoMode);
+      host.classList.toggle('is-auto', autoMode);
+      autoBtn.setAttribute('title', autoMode ? 'Stop Scroll' : 'Auto Scroll');
+      autoBtn.setAttribute('aria-label', autoMode ? 'Stop Scroll' : 'Auto Scroll');
+      autoBtn.setAttribute('data-tip', autoMode ? 'Stop Scroll' : 'Auto Scroll');
+      autoIconWrap.innerHTML = autoMode ? iconPause() : iconPlay();
+    }
+
+    function stopAutoScroll() {
+      autoMode = false;
+      interactionPauseUntil = 0;
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      updateAutoUI();
+    }
+
+    function pauseAutoTemporarily() {
+      if (!autoMode) return;
+      interactionPauseUntil = Date.now() + interactionResumeDelayMs;
+    }
+
+    function autoTick() {
+      if (!autoMode) return;
+
+      if (Date.now() < interactionPauseUntil) {
+        rafId = window.requestAnimationFrame(autoTick);
+        return;
+      }
+
+      const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      const nextY = window.scrollY + step;
+      if (nextY >= maxY - 2) {
+        stopAutoScroll();
+        return;
+      }
+
+      window.scrollTo(0, nextY);
+      rafId = window.requestAnimationFrame(autoTick);
+    }
+
+    function startAutoScroll() {
+      autoMode = true;
+      interactionPauseUntil = 0;
+      updateAutoUI();
+      autoTick();
+    }
+
+    trigger.addEventListener('click', function(event) {
+      event.stopPropagation();
+      setPanelOpen(!host.classList.contains('open'));
+    });
+
+    autoBtn.addEventListener('click', function() {
+      if (autoMode) {
+        stopAutoScroll();
+      } else {
+        startAutoScroll();
+      }
+      setPanelOpen(false);
+      trackEvent('auto_scroll_toggle', { mode: MODE, enabled: autoMode ? '1' : '0' });
+    });
+
+    topBtn.addEventListener('click', function() {
+      stopAutoScroll();
+      window.scroll({ top: 0, behavior: 'smooth' });
+      setPanelOpen(false);
+      trackEvent('back_to_top_click', { mode: MODE });
+    });
+
+    function openRandomImage(type) {
+      const url = new URL('/api/random', randomBase);
+      url.searchParams.set('format', 'redirect');
+      if (type !== 'all') {
+        url.searchParams.set('type', type);
+      }
+      window.open(url.toString(), '_blank', 'noopener,noreferrer');
+      setPanelOpen(false);
+      trackEvent('random_image_open', { mode: MODE, type: type });
+    }
+
+    randomAllBtn.addEventListener('click', function() {
+      openRandomImage('all');
+    });
+
+    function resolveSmartRandomType() {
+      if (activeType === 'h' || activeType === 'v') {
+        return activeType;
+      }
+      const portrait = window.matchMedia && window.matchMedia('(orientation: portrait)').matches;
+      return portrait ? 'v' : 'h';
+    }
+
+    randomSmartBtn.addEventListener('click', function() {
+      const pickedType = resolveSmartRandomType();
+      openRandomImage(pickedType);
+    });
+
+    document.addEventListener('click', function(event) {
+      if (!host.contains(event.target)) {
+        setPanelOpen(false);
+      }
+    });
+
+    window.addEventListener('wheel', pauseAutoTemporarily, { passive: true });
+    window.addEventListener('touchstart', pauseAutoTemporarily, { passive: true });
+    window.addEventListener('pointerdown', pauseAutoTemporarily, { passive: true });
+    window.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') {
+        setPanelOpen(false);
+        if (autoMode) stopAutoScroll();
+        return;
+      }
+      if (autoMode) {
+        const key = event.key;
+        if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'PageDown' || key === 'PageUp' || key === 'Home' || key === 'End' || key === ' ') {
+          pauseAutoTemporarily();
+        }
+      }
+    });
+
+    window.addEventListener('resize', scheduleRadialLayout, { passive: true });
+    scheduleRadialLayout();
+    updateAutoUI();
+  }
+
   function getGrid(type) {
+
     return document.getElementById('grid-' + type);
   }
 
@@ -510,6 +827,7 @@
   document.addEventListener('DOMContentLoaded', function() {
     initTheme();
     initColumns();
+    initFloatingTools();
 
     if (window.Fancybox) {
       const mobileViewer = window.matchMedia && window.matchMedia('(max-width: 860px)').matches;
