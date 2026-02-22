@@ -547,10 +547,9 @@ func (s *Server) handleImageProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ext := filepath.Ext(name); ext != "" {
-		if t := mime.TypeByExtension(ext); t != "" {
-			w.Header().Set("Content-Type", t)
-		}
+	contentType := detectImageProxyContentType(name, data)
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
 	}
 
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
@@ -560,11 +559,69 @@ func (s *Server) handleImageProxy(w http.ResponseWriter, r *http.Request) {
 		if name != "" {
 			filename = filepath.Base(name)
 		}
+		filename = ensureDownloadFilenameExt(filename, contentType)
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 	}
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
+}
+
+func detectImageProxyContentType(name string, data []byte) string {
+	if ext := strings.ToLower(filepath.Ext(name)); ext != "" {
+		if t := mime.TypeByExtension(ext); t != "" {
+			return t
+		}
+	}
+	if len(data) > 0 {
+		return http.DetectContentType(data)
+	}
+	return ""
+}
+
+func ensureDownloadFilenameExt(filename, contentType string) string {
+	if filename == "" || filepath.Ext(filename) != "" {
+		return filename
+	}
+	if ext := extensionByContentType(contentType); ext != "" {
+		return filename + ext
+	}
+	return filename
+}
+
+func extensionByContentType(contentType string) string {
+	mediaType := strings.ToLower(strings.TrimSpace(contentType))
+	if mediaType == "" {
+		return ""
+	}
+	if t, _, err := mime.ParseMediaType(mediaType); err == nil {
+		mediaType = strings.ToLower(t)
+	} else if i := strings.IndexByte(mediaType, ';'); i >= 0 {
+		mediaType = strings.TrimSpace(mediaType[:i])
+	}
+
+	switch mediaType {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	case "image/avif":
+		return ".avif"
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	}
+
+	exts, err := mime.ExtensionsByType(mediaType)
+	if err != nil || len(exts) == 0 {
+		return ""
+	}
+	return exts[0]
 }
 
 func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, path string) {
